@@ -6,6 +6,11 @@ from models import User
 from auth import get_password_hash, verify_password, create_access_token, get_current_user
 from auth import oauth2_scheme
 from datetime import timedelta
+from typing import List
+from models import JobApplication
+from schemas import JobApplicationCreate, JobApplicationOut
+from auth import get_current_user
+from fastapi import Path
 
 # 1) Create all tables in database (if they don't exist)
 Base.metadata.create_all(bind=engine)
@@ -54,5 +59,90 @@ def login(user_in: UserCreate, db: Session = Depends(get_db)):
 @app.get("/auth/me", response_model=UserOut)
 def read_users_me(current_user: User = Depends(get_current_user)):
     return current_user
+
+apps_router = FastAPI().router  # we will prefix these routes manually below
+
+@app.post("/apps/", response_model=JobApplicationOut)
+def create_app(
+    app_in: JobApplicationCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Create a new JobApplication instance
+    db_app = JobApplication(**app_in.dict(), user_id=current_user.id)
+    db.add(db_app)
+    db.commit()
+    db.refresh(db_app)
+    return db_app
+
+@app.get("/apps/", response_model=List[JobApplicationOut])
+def read_apps(
+    skip: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Return all apps for this user, with pagination
+    apps = (
+        db.query(JobApplication)
+        .filter(JobApplication.user_id == current_user.id)
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    return apps
+
+@app.get("/apps/{app_id}", response_model=JobApplicationOut)
+def read_app(
+    app_id: int = Path(..., title="The ID of the application to retrieve"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    db_app = (
+        db.query(JobApplication)
+        .filter(JobApplication.id == app_id, JobApplication.user_id == current_user.id)
+        .first()
+    )
+    if not db_app:
+        raise HTTPException(status_code=404, detail="Application not found")
+    return db_app
+
+@app.put("/apps/{app_id}", response_model=JobApplicationOut)
+def update_app(
+    app_id: int,
+    app_in: JobApplicationCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    db_app = (
+        db.query(JobApplication)
+        .filter(JobApplication.id == app_id, JobApplication.user_id == current_user.id)
+        .first()
+    )
+    if not db_app:
+        raise HTTPException(status_code=404, detail="Application not found")
+    # Update fields
+    for field, value in app_in.dict().items():
+        setattr(db_app, field, value)
+    db.commit()
+    db.refresh(db_app)
+    return db_app
+
+@app.delete("/apps/{app_id}")
+def delete_app(
+    app_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    db_app = (
+        db.query(JobApplication)
+        .filter(JobApplication.id == app_id, JobApplication.user_id == current_user.id)
+        .first()
+    )
+    if not db_app:
+        raise HTTPException(status_code=404, detail="Application not found")
+    db.delete(db_app)
+    db.commit()
+    return {"detail": "Application deleted"}
 
 
